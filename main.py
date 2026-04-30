@@ -1,41 +1,66 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from models import Coche
+from database import engine
+from database import Base
+from dependencies import get_db
 from pydantic import BaseModel
 
-app = FastAPI(title="Movie API")
+app = FastAPI()
 
-db_peliculas = {}
+class CocheCreate(BaseModel):
+    marca: str
+    modelo: str | None = None
+    año: int
+    precio: float
+    disponible: bool = True
 
-class Pelicula(BaseModel):
-    titulo: str
-    director: str
-    genero: str
-    en_cartelera: bool = True
+class CocheResponse(CocheCreate):
+    id: int
 
+    class Config:
+        orm_mode = True
 
-@app.get("/peliculas")
-def listar_peliculas():
-    return db_peliculas
+@app.post("/coches/", response_model=CocheResponse)
+async def create_coche(coche: CocheCreate, db: AsyncSession = Depends(get_db)):
+    db_coche = Coche(**coche.dict())
+    db.add(db_coche)
+    await db.commit()
+    await db.refresh(db_coche)
+    return db_coche
 
+@app.get("/coches/{coche_id}", response_model=CocheResponse)
+async def read_coche(coche_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Coche).where(Coche.id == coche_id))
+    coche = result.scalar_one_or_none()
+    if not coche:
+        raise HTTPException(status_code=404, detail="Coche no encontrado")
+    return coche
 
-@app.get("/peliculas/{pelicula_id}")
-def obtener_pelicula(pelicula_id: int):
-    return db_peliculas.get(pelicula_id, {"error": "Película no encontrada"})
+@app.get("/coches/", response_model=list[CocheResponse])
+async def list_coches(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Coche))
+    return result.scalars().all()
 
+@app.put("/coches/{coche_id}", response_model=CocheResponse)
+async def update_coche(coche_id: int, coche: CocheCreate, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Coche).where(Coche.id == coche_id))
+    db_coche = result.scalar_one_or_none()
+    if not db_coche:
+        raise HTTPException(status_code=404, detail="Coche no encontrado")
+    for key, value in coche.dict().items():
+        setattr(db_coche, key, value)
+    await db.commit()
+    await db.refresh(db_coche)
+    return db_coche
 
-@app.post("/peliculas")
-def crear_pelicula(pelicula: Pelicula):
-    nuevo_id = len(db_peliculas) + 1
-    db_peliculas[nuevo_id] = pelicula
-    return {"id": nuevo_id, "pelicula": pelicula}
-
-
-@app.put("/peliculas/{pelicula_id}")
-def actualizar_pelicula(pelicula_id: int, pelicula: Pelicula):
-    db_peliculas[pelicula_id] = pelicula
-    return {"mensaje": "Película actualizada", "id": pelicula_id}
-
-
-@app.delete("/peliculas/{pelicula_id}")
-def eliminar_pelicula(pelicula_id: int):
-    eliminada = db_peliculas.pop(pelicula_id, None)
-    return {"eliminada": bool(eliminada)}
+@app.delete("/coches/{coche_id}")
+async def delete_coche(coche_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Coche).where(Coche.id == coche_id))
+    coche = result.scalar_one_or_none()
+    if not coche:
+        raise HTTPException(status_code=404, detail="Coche no encontrado")
+    await db.delete(coche)
+    await db.commit()
+    return {"mensaje": "Coche eliminado"}
